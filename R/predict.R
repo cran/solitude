@@ -8,7 +8,8 @@
 #' @param aggregator Function(as a string, default is 'median') to aggregate the
 #'   corrected depths per observation over all trees. This is applicable when
 #'   type is anomaly_score
-#' @param ... Ignored
+#' @param ... Arguments to be passed to future.apply::future_lapply when future
+#'   backend is setup
 #' @details The following types of prediction are supported: \itemize{
 #'
 #'   \item anomaly_score: The thumb rule says: If the score is closer to 1 for a
@@ -21,7 +22,9 @@
 #'
 #'   }
 #'
-#'   See <doi:10.1145/2133360.2133363> for more details
+#'   See <doi:10.1145/2133360.2133363> for more details.
+#'
+#'   The predict method supports parallelism via \pkg{future}s.
 #' @return Two outputs depending on type argument: \itemize{
 #'
 #'   \item anomaly_score: A vector(length of number of observations in the data)
@@ -79,8 +82,8 @@ predict.solitude <- function(object
   }
 
   res <- switch(type
-                , depth_corrected = depth_corrected(object, data)
-                , anomaly_score   = anomaly_score(object, data, aggregator)
+                , depth_corrected = depth_corrected(object, data, ...)
+                , anomaly_score   = anomaly_score(object, data, aggregator, ...)
                 )
 
   return(res)
@@ -91,7 +94,10 @@ predict.solitude <- function(object
 #' @description depth_corrected
 #' @param object isolation forest model
 #' @param newdata dataframe to predict
-depth_corrected <- function(object, newdata){
+#' @param ... Arguments to be passed to future.apply::future_lapply
+depth_corrected <- function(object, newdata, ...){
+
+  args_future <- list(...)
 
   num_trees <- object[["forest"]][["num.trees"]]
 
@@ -111,11 +117,17 @@ depth_corrected <- function(object, newdata){
   }
 
   corrected_depths <-
-    do.call(cbind
-            , lapply(
-              1:num_trees
-              , function(x) as.numeric(get_corrected_depths(x)[as.character(tnm[, x])])
-            )
+    Reduce(
+      cbind
+      , fastDoCall(
+          future.apply::future_lapply
+          , c(
+              list(1:num_trees
+                   , function(x) as.numeric(get_corrected_depths(x)[as.character(tnm[, x])])
+                   )
+             , args_future
+             )
+          )
     )
 
   return(corrected_depths)
@@ -127,9 +139,11 @@ depth_corrected <- function(object, newdata){
 #' @param object isolation forest model
 #' @param newdata dataframe to predict
 #' @param aggregator aggregator
-anomaly_score <- function(object, newdata, aggregator = "median"){
+#' @param ... Arguments to be passed to future.apply::future_lapply in
+#'   'depth_corrected'
+anomaly_score <- function(object, newdata, aggregator = "median", ...){
 
-  corrected_depths <- depth_corrected(object, newdata)
+  corrected_depths <- depth_corrected(object, newdata, ...)
   res <- compute_anomaly(apply(corrected_depths
                                , 1
                                , eval(as.symbol(aggregator))
@@ -152,12 +166,12 @@ depth_terminalNodes <- function(treelike){
   data.table::setDT(treelike)
   dropThese <- setdiff(colnames(treelike)
                        , c("nodeID", "leftChild", "rightChild")
-  )
+                       )
   treelike[, c(dropThese) := NULL]
   melted    <- data.table::melt(treelike
                                 , id.vars      = "nodeID"
                                 , measure.vars = c("leftChild", "rightChild")
-  )
+                                )
   value       <- NULL
   edgeMat     <- as.matrix(melted[!is.na(value), c("nodeID", "value")]) + 1L
   treegraph   <- igraph::graph_from_edgelist(edgeMat)

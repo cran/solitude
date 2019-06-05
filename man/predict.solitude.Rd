@@ -18,7 +18,8 @@
 corrected depths per observation over all trees. This is applicable when
 type is anomaly_score}
 
-\item{...}{Ignored}
+\item{...}{Arguments to be passed to future.apply::future_lapply when future
+backend is setup}
 }
 \value{
 Two outputs depending on type argument: \itemize{
@@ -50,7 +51,9 @@ The following types of prediction are supported: \itemize{
 
   }
 
-  See <doi:10.1145/2133360.2133363> for more details
+  See <doi:10.1145/2133360.2133363> for more details.
+
+  The predict method supports parallelism via \pkg{future}s.
 }
 \examples{
 set.seed(100)
