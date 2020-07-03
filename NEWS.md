@@ -1,7 +1,11 @@
+# solitude 1.0.0
+
+- API is finalized.
+
 # solitude 0.2.1
 
 - added 'mtry' argument for isolationForest method
-- minor optimizations in 'terminalNodesDepth' function
+- minor optimizations in 'terminalNodesDepth' fuction
 
 # solitude 0.2.0
 

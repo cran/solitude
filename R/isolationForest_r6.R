@@ -10,28 +10,25 @@
 #'
 #'   \itemize{
 #'
-#'   \item \code{sample_size}: (positive integer, default = 256) Number of
-#'   observations in the dataset to used to build a tree in  the forest
-#'
 #'   \item \code{num_trees}: (positive integer, default = 100) Number of trees
 #'   to be built in the forest
 #'
-#'   \item \code{mtry}: (positive integer, default = 1) Number of variables to
-#'   be selected at each node of a tree. Random cut points are chosen for each
-#'   variable and most optimal among them is chosen
+#'   \item \code{sample_fraction}: ((0, 1], default = 1) Fraction of the dataset
+#'   to be sampled or bootstrapped per tree. See 'sample.fraction' argument in
+#'   \code{\link[ranger]{ranger}}
 #'
 #'   \item \code{replace}: (boolean, default = FALSE) Whether the sample of
-#'   observations should be chosen with replacement when sample_size is less
-#'   than the number of observations in the dataset
+#'   observations for each tree should be chosen with replacement. See 'replace'
+#'   argument in \code{\link[ranger]{ranger}}
 #'
 #'   \item \code{seed}: (positive integer, default = 101) Random seed for the
 #'   forest
 #'
-#'   \item \code{nproc}: (NULL or a positive integer, default: NULL, means use
-#'   all resources) Number of parallel threads to be used by ranger
+#'   \item \code{nproc}: (a positive integer, default: one less than maximum
+#'   number of scores available) Number of parallel threads to be used by ranger
 #'
-#'   \item \code{respect_unordered_factors}: (string, default: "partition")See
-#'   respect.unordered.factors argument in \code{\link[ranger]{ranger}}
+#'   \item \code{respect_unordered_factors}: (string, default: "partition") See
+#'   'respect.unordered.factors' argument in \code{\link[ranger]{ranger}}
 #'
 #'   }
 #'
@@ -46,26 +43,28 @@
 #'   \itemize{
 #'
 #'   \item Parallelization: \code{\link[ranger]{ranger}} is parallelized and by
-#'   default uses all the resources. This is supported when nproc is set to
-#'   NULL. The process of obtaining depths of terminal nodes (which is excuted
-#'   with \code{$fit()} is called) may be parallelized separately by setting up
-#'   a \pkg{future} backend.
+#'   default uses all cores but one. The process of obtaining depths of terminal
+#'   nodes (which is executed with \code{$fit()} is called) may be parallelized
+#'   separately by setting up a \pkg{future} backend.
 #'
 #'   }
 #'
 #' @examples
-#' data("attrition", package = "rsample")
+#' data("humus", package = "mvoutlier")
+#' columns_required = setdiff(colnames(humus)
+#'                            , c("Cond", "ID", "XCOO", "YCOO", "LOI")
+#'                            )
+#' humus2 = humus[ , columns_required]
 #' set.seed(1)
-#' index = sample(ceiling(nrow(attrition) * 0.2))
+#' index = sample(ceiling(nrow(humus2) * 0.5))
 #' isf = isolationForest$new()  # initiate
-#' isf$fit(attrition[index, ])  # fit on 80% data
+#' isf$fit(humus2[index, ])     # fit on 80% data
 #' isf$scores                   # obtain anomaly scores
 #'
 #' # scores closer to 1 might indicate outliers
 #' plot(density(isf$scores$anomaly_score))
-#' round(head(sort(isf$scores$anomaly_score, dec = TRUE), 20), 2)
 #'
-#' isf$predict(attrition[-index, ]) # scores for new data
+#' isf$predict(humus2[-index, ]) # scores for new data
 #' @export
 
 isolationForest = R6::R6Class(
@@ -92,50 +91,40 @@ isolationForest = R6::R6Class(
   #
   public = list(
 
-    sample_size                 = NULL
-    , num_trees                 = NULL
-    , mtry                      = NULL
+    num_trees                   = NULL
     , replace                   = NULL
     , seed                      = NULL
     , nproc                     = NULL
     , respect_unordered_factors = NULL
-
-    , scores = NULL
-    , status = "not_initialized"
+    , sample_fraction           = NULL
+    , scores                    = NULL
+    , status                    = "not_initialized"
     ,
     # intialize arguments required for fitting extratrees via ranger
-    initialize = function(sample_size                 = 256
-                          , num_trees                 = 100
-                          , mtry                      = 1
-                          , replace                   = FALSE
-                          , seed                      = 101
-                          , nproc                     = NULL
-                          , respect_unordered_factors = NULL
-                          ){
+    initialize = function(
+      num_trees                   = 100
+      , replace                   = FALSE
+      , sample_fraction           = 1
+      , respect_unordered_factors = "partition"
+      , seed                      = 101
+      , nproc                     = parallel::detectCores() -1
+      ){
 
-      stopifnot(is_integerish(sample_size) && length(sample_size) == 1)
-      stopifnot(0 < sample_size)
       stopifnot(is_integerish(num_trees) && length(num_trees) == 1)
       stopifnot(0 < num_trees)
       stopifnot(is.logical(replace) && length(replace) == 1)
       stopifnot(is_integerish(seed) && length(seed) == 1)
-      stopifnot(is.null(nproc) ||
-                  (is_integerish(nproc) && length(nproc == 1) && nproc >= 1)
-                )
-      stopifnot(is.null(respect_unordered_factors) ||
-                  (is.character(respect_unordered_factors) &&
+      stopifnot(is_integerish(nproc) && length(nproc == 1) && nproc >= 1)
+      stopifnot(is.character(respect_unordered_factors) &&
                   length(respect_unordered_factors) == 1)
-                )
-      stopifnot(is_integerish(mtry) && mtry >= 1)
+      stopifnot(sample_fraction <= 1 && sample_fraction > 0)
 
-
-      self$sample_size               = sample_size
       self$num_trees                 = num_trees
-      self$mtry                      = mtry
       self$replace                   = replace
       self$seed                      = seed
       self$nproc                     = nproc
       self$respect_unordered_factors = respect_unordered_factors
+      self$sample_fraction           = sample_fraction
 
       self$status = "not_trained"
     }
@@ -145,37 +134,35 @@ isolationForest = R6::R6Class(
       # create new fit
       if(self$status == "trained"){
         self$status = "not_trained"
-        message("Retraining ... ")
+        warning("Retraining ... all previous training results will be lost")
       }
 
       # create a new 'y' column with jumbled 1:n
       columnNames  = colnames(dataset)
       nr           = nrow(dataset)
+      nc           = ncol(dataset)
       responseName = columnNames[[1]]
-      while(deparse(substitute(responseName)) %in% columnNames){
+      while (deparse(substitute(responseName)) %in% columnNames) {
         responseName = sample(c(letters, LETTERS), 20, replace = TRUE)
       }
-      set.seed(self$seed)
-      dataset[[deparse(substitute(responseName))]] = sample.int(nrow(dataset))
-
-      # deduce sample_fraction
-      stopifnot(self$sample_size <= nr)
-      private$sample_fraction = self$sample_size/nr
+      set.seed(self$seed + 1)
+      dataset[[deparse(substitute(responseName))]] = sample(nrow(dataset))
 
       # build a extratrees forest
       message("Building Isolation Forest ... ", appendLF = FALSE)
       private$forest = ranger::ranger(
         dependent.variable.name     = deparse(substitute(responseName))
         , data                      = dataset
-        , mtry                      = self$mtry
+        , mtry                      = nc
         , min.node.size             = 1L
         , splitrule                 = "extratrees"
         , num.random.splits         = 1L
         , num.trees                 = self$num_trees
         , replace                   = self$replace
-        , sample.fraction           = private$sample_fraction
+        , sample.fraction           = self$sample_fraction
         , respect.unordered.factors = self$respect_unordered_factors
         , num.threads               = self$nproc
+        , oob.error                 = FALSE
         , seed                      = self$seed
         )
       message("done")
@@ -186,7 +173,7 @@ isolationForest = R6::R6Class(
       message("done")
 
       # set phi -- sample size used for tree building
-      private$phi = floor(private$sample_fraction * nr)
+      private$phi = floor(self$sample_fraction * nr)
 
       # predict anomaly scores for data used for fitting
       self$scores = self$predict(dataset)
@@ -223,18 +210,15 @@ isolationForest = R6::R6Class(
                         , by = c("id_tree", "id_node")
                         )
 
-      # only while training:
       # create extra path length when terminal nodes are not singletons
-      if(self$status == "not_trained"){
-        private$path_length_extend = tnm[ , .N, c("id_tree", "id_node")]
-        private$path_length_extend[
+      path_length_extend = tnm[ , .N, c("id_tree", "id_node")]
+      path_length_extend[
           , extend := vapply(N, private$pathLengthNormalizer, numeric(1))
           ]
-      }
 
       # extend length depending on terminal node
       obs_depth = merge(obs_depth
-                        , private$path_length_extend
+                        , path_length_extend
                         , by = c("id_tree", "id_node")
                         )
       obs_depth[ , depth := depth + extend]
@@ -245,12 +229,15 @@ isolationForest = R6::R6Class(
       id            = NULL
       anomaly_score = NULL
 
-      scores = obs_depth[ , .(average_depth = mean(depth)), by = id][
-        order(id)]
+      scores = obs_depth[ , .(average_depth = mean(depth)
+                              , median_depth = median(depth)
+                              )
+                          , by = id][order(id)]
       scores[, anomaly_score :=
-               private$computeAnomaly(average_depth, private$phi)][]
+               private$computeAnomaly(average_depth, private$phi)]
+      data.table::setorder(scores, -anomaly_score)
 
-      return(scores)
+      return(scores[])
     }
   )
   ,
@@ -259,8 +246,6 @@ isolationForest = R6::R6Class(
     forest                       = NULL
     , terminal_nodes_depth       = NULL
     , phi                        = NULL
-    , path_length_extend         = NULL
-    , sample_fraction            = NULL
     ,
     pathLengthNormalizer = function(phi){
 
