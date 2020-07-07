@@ -16,25 +16,24 @@
 
   \itemize{
 
+  \item \code{sample_size}: (positive integer, default = 256) Number of
+  observations in the dataset to used to build a tree in  the forest
+
   \item \code{num_trees}: (positive integer, default = 100) Number of trees
   to be built in the forest
 
-  \item \code{sample_fraction}: ((0, 1], default = 1) Fraction of the dataset
-  to be sampled or bootstrapped per tree. See 'sample.fraction' argument in
-  \code{\link[ranger]{ranger}}
-
   \item \code{replace}: (boolean, default = FALSE) Whether the sample of
-  observations for each tree should be chosen with replacement. See 'replace'
-  argument in \code{\link[ranger]{ranger}}
+  observations should be chosen with replacement when sample_size is less
+  than the number of observations in the dataset
 
   \item \code{seed}: (positive integer, default = 101) Random seed for the
   forest
 
-  \item \code{nproc}: (a positive integer, default: one less than maximum
-  number of scores available) Number of parallel threads to be used by ranger
+  \item \code{nproc}: (NULL or a positive integer, default: NULL, means use
+  all resources) Number of parallel threads to be used by ranger
 
-  \item \code{respect_unordered_factors}: (string, default: "partition") See
-  'respect.unordered.factors' argument in \code{\link[ranger]{ranger}}
+  \item \code{respect_unordered_factors}: (string, default: "partition")See
+  respect.unordered.factors argument in \code{\link[ranger]{ranger}}
 
   }
 
@@ -51,9 +50,10 @@
   \itemize{
 
   \item Parallelization: \code{\link[ranger]{ranger}} is parallelized and by
-  default uses all cores but one. The process of obtaining depths of terminal
-  nodes (which is executed with \code{$fit()} is called) may be parallelized
-  separately by setting up a \pkg{future} backend.
+  default uses all the resources. This is supported when nproc is set to
+  NULL. The process of obtaining depths of terminal nodes (which is excuted
+  with \code{$fit()} is called) may be parallelized separately by setting up
+  a \pkg{future} backend.
 
   }
 }
@@ -64,16 +64,14 @@ columns_required = setdiff(colnames(humus)
                            , c("Cond", "ID", "XCOO", "YCOO", "LOI")
                            )
 humus2 = humus[ , columns_required]
+str(humus2)
 set.seed(1)
 index = sample(ceiling(nrow(humus2) * 0.5))
-isf = isolationForest$new()  # initiate
-isf$fit(humus2[index, ])     # fit on 80\% data
-isf$scores                   # obtain anomaly scores
-
-# scores closer to 1 might indicate outliers
-plot(density(isf$scores$anomaly_score))
-
-isf$predict(humus2[-index, ]) # scores for new data
+# initiate an isolation forest
+iso = isolationForest$new(sample_size = length(index))
+iso$fit(dataset = humus2[index, ])
+iso$predict(humus2[index, ]) # scores for train data
+iso$predict(humus2[-index, ]) # scores for new data (50\% sample)
 }
 \section{Methods}{
 \subsection{Public methods}{
@@ -90,12 +88,12 @@ isf$predict(humus2[-index, ]) # scores for new data
 \subsection{Method \code{new()}}{
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{isolationForest$new(
+  sample_size = 256,
   num_trees = 100,
   replace = FALSE,
-  sample_fraction = 1,
-  respect_unordered_factors = "partition",
   seed = 101,
-  nproc = parallel::detectCores() - 1
+  nproc = NULL,
+  respect_unordered_factors = NULL
 )}\if{html}{\out{</div>}}
 }
 
