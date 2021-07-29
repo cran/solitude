@@ -35,7 +35,7 @@
 #'
 #'   }
 #'
-#'   \code{$fit()} fits a isolation forest for the given dataframe, computes
+#'   \code{$fit()} fits a isolation forest for the given dataframe or sparse matrix, computes
 #'   depths of terminal nodes of each tree and stores the anomaly scores and
 #'   average depth values in \code{$scores} object as a data.table
 #'
@@ -54,19 +54,50 @@
 #'   }
 #'
 #' @examples
-#' data("humus", package = "mvoutlier")
-#' columns_required = setdiff(colnames(humus)
-#'                            , c("Cond", "ID", "XCOO", "YCOO", "LOI")
-#'                            )
-#' humus2 = humus[ , columns_required]
-#' str(humus2)
-#' set.seed(1)
-#' index = sample(ceiling(nrow(humus2) * 0.5))
-#' # initiate an isolation forest
-#' iso = isolationForest$new(sample_size = length(index))
-#' iso$fit(dataset = humus2[index, ])
-#' iso$predict(humus2[index, ]) # scores for train data
-#' iso$predict(humus2[-index, ]) # scores for new data (50% sample)
+#' \dontrun{
+#' library("solitude")
+#' library("tidyverse")
+#' library("mlbench")
+#'
+#' data(PimaIndiansDiabetes)
+#' PimaIndiansDiabetes = as_tibble(PimaIndiansDiabetes)
+#' PimaIndiansDiabetes
+#'
+#' splitter   = PimaIndiansDiabetes %>%
+#'   select(-diabetes) %>%
+#'   rsample::initial_split(prop = 0.5)
+#' pima_train = rsample::training(splitter)
+#' pima_test  = rsample::testing(splitter)
+#'
+#' iso = isolationForest$new()
+#' iso$fit(pima_train)
+#'
+#' scores_train = pima_train %>%
+#'   iso$predict() %>%
+#'   arrange(desc(anomaly_score))
+#'
+#' scores_train
+#'
+#' umap_train = pima_train %>%
+#'   scale() %>%
+#'   uwot::umap() %>%
+#'   setNames(c("V1", "V2")) %>%
+#'   as_tibble() %>%
+#'   rowid_to_column() %>%
+#'   left_join(scores_train, by = c("rowid" = "id"))
+#'
+#' umap_train
+#'
+#' umap_train %>%
+#'   ggplot(aes(V1, V2)) +
+#'   geom_point(aes(size = anomaly_score))
+#'
+#' scores_test = pima_test %>%
+#'   iso$predict() %>%
+#'   arrange(desc(anomaly_score))
+#'
+#' scores_test
+#' }
 #' @export
 
 isolationForest = R6::R6Class(
@@ -144,8 +175,11 @@ isolationForest = R6::R6Class(
     ,
     fit = function(dataset){
 
+      is_sparse = grepl("dg.Matrix", class(dataset)[[1]])
       # check if any rows are duplicated
-      if (anyDuplicated(dataset) > 0){
+      if (is_sparse) {
+        lgr::lgr$info("sparse dataset detected, skipping duplication check")
+      } else if (anyDuplicated(dataset) > 0) {
         lgr::lgr$info("dataset has duplicated rows")
       }
 
@@ -158,12 +192,9 @@ isolationForest = R6::R6Class(
       # create a new 'y' column with jumbled 1:n
       columnNames  = colnames(dataset)
       nr           = nrow(dataset)
-      responseName = columnNames[[1]]
-      while(deparse(substitute(responseName)) %in% columnNames){
-        responseName = sample(c(letters, LETTERS), 20, replace = TRUE)
-      }
+
       set.seed(self$seed)
-      dataset[[deparse(substitute(responseName))]] = sample.int(nrow(dataset))
+      yy = sample.int(nrow(dataset))
 
       # deduce sample_fraction
       stopifnot(self$sample_size <= nr)
@@ -172,8 +203,8 @@ isolationForest = R6::R6Class(
       # build a extratrees forest
       lgr::lgr$info("Building Isolation Forest ... ")
       self$forest = ranger::ranger(
-        dependent.variable.name     = deparse(substitute(responseName))
-        , data                      = dataset
+        x = dataset
+        , y = yy
         , mtry                      = ncol(dataset) - 1L
         , min.node.size             = 1L
         , splitrule                 = "extratrees"
